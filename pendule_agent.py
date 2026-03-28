@@ -4,10 +4,11 @@
 Reseau de neurones et agent RL implementes from scratch (aucune bibliotheque ML).
 
 Usage:
-    python pendule_agent.py train [episodes]   - Entrainer l'agent (sans GUI)
-    python pendule_agent.py test               - Tester l'agent entraine (sans GUI)
-    python pendule_agent.py play               - Visualiser avec l'agent entraine (GUI)
-    python pendule_agent.py                    - Identique a 'play'
+    python pendule_agent.py train [episodes]           - Entrainer l'agent (sans GUI)
+    python pendule_agent.py train_gui [episodes]       - Entrainer l'agent (avec GUI)
+    python pendule_agent.py test                       - Tester l'agent entraine (sans GUI)
+    python pendule_agent.py play                       - Visualiser avec l'agent entraine (GUI)
+    python pendule_agent.py                            - Identique a 'play'
 """
 
 import math
@@ -477,6 +478,86 @@ def train(num_episodes=2000, weights_path=WEIGHTS_FILE):
 
 
 # ===========================================================================
+# Entrainement avec GUI
+# ===========================================================================
+
+def train_gui(num_episodes=2000, weights_path=WEIGHTS_FILE):
+    """Entraine l'agent DQN avec visualisation en temps reel (GUI)."""
+    view_obj = view()
+    model_obj = model()
+    env = PendulumEnv(max_steps=200, fall_angle=math.radians(70))
+    agent = DQNAgent(lr=0.0005)
+
+    if os.path.exists(weights_path):
+        print(f"[train_gui] Chargement des poids existants depuis {weights_path}")
+        agent.load(weights_path)
+        agent.eps = 0.3
+
+    best_eval = -float('inf')
+    history = []
+    t_start = time.time()
+
+    for ep in range(num_episodes):
+        if not view_obj.continuer:
+            break
+
+        # Curriculum lineaire : angle max de 10 deg a 55 deg
+        frac = ep / max(1, num_episodes - 1)
+        max_a = math.radians(10 + 45 * min(1.0, frac / 0.8))
+
+        # 20% d'episodes faciles pour eviter l'oubli catastrophique
+        if random() < 0.2:
+            theta0 = uniform(-math.radians(10), math.radians(10))
+        else:
+            theta0 = uniform(-max_a, max_a)
+        state = env.reset(theta0)
+        es = agent.encode(state)
+        ep_r = 0.0
+
+        while view_obj.continuer:
+            a = agent.act(es)
+            state2, r, done = env.step(a)
+            es2 = agent.encode(state2)
+            agent.remember(es, a, r, es2, done)
+            agent.learn()
+            ep_r += r
+            es = es2
+
+            # Mise a jour de la GUI chaque 4 pas
+            if env.t % 4 == 0:
+                model_obj.x = state2[0]
+                model_obj.theta = state2[3]
+                theta_deg = -model_obj.theta * 180.0 / math.pi
+                view_obj.action(model_obj.x, theta_deg)
+                view_obj.processFrame()
+
+            if done:
+                break
+
+        agent.end_episode()
+        history.append(ep_r)
+
+        # Evaluation periodique (performance sans exploration)
+        if (ep + 1) % 50 == 0:
+            eval_r = evaluate(agent, n_episodes=5, max_angle_deg=45)
+            if eval_r > best_eval:
+                best_eval = eval_r
+                agent.save(weights_path)
+            elapsed = time.time() - t_start
+            avg = sum(history[-50:]) / min(50, len(history))
+            status_text = (f"Ep {ep + 1:4d}/{num_episodes} | Train50: {avg:7.1f} | "
+                          f"Eval(45deg): {eval_r:7.1f} | Eps: {agent.eps:.3f} | "
+                          f"Best: {best_eval:7.1f}")
+            print(f"  {status_text} | Time: {elapsed:.0f}s")
+            view_obj.dspText(status_text)
+
+    elapsed = time.time() - t_start
+    print(f"\n[train_gui] Termine en {elapsed:.0f}s.")
+    print(f"[train_gui] Meilleur modele -> {weights_path}")
+    view_obj.quit()
+
+
+# ===========================================================================
 # Test
 # ===========================================================================
 
@@ -621,6 +702,9 @@ if __name__ == "__main__":
         if cmd == "train":
             eps = int(sys.argv[2]) if len(sys.argv) > 2 else 2000
             train(eps)
+        elif cmd == "train_gui":
+            eps = int(sys.argv[2]) if len(sys.argv) > 2 else 2000
+            train_gui(eps)
         elif cmd == "test":
             test()
         elif cmd == "play":
